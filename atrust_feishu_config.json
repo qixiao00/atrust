@@ -1,0 +1,9 @@
+{
+  "base_url": "",
+  "api_id": "1027079",
+  "api_secret": "c6b9e1c7f58645bfa3af7920b6dc7d72",
+  "ad_domain": "ad13382",
+  "feishu_domain": "feishu86454",
+  "insecure": true,
+  "max_ops_per_second": 8.0
+}
