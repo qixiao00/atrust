@@ -66,6 +66,24 @@ def page_count(payload: dict[str, Any]) -> int:
     return 1
 
 
+def build_http_error_message(code: int, method: str, path: str, detail: str) -> str:
+    message = f"HTTP {code} {method} {path}: {detail}"
+    try:
+        payload = json.loads(detail)
+    except json.JSONDecodeError:
+        return message
+
+    if payload.get("code") == "AuthFailed.OpenAPI":
+        return (
+            f"{message}\n"
+            "OpenAPI authentication failed. Please check atrust_feishu_config.json: "
+            "base_url must be the aTrust console scheme/host/port only, api_id and "
+            "api_secret must match an enabled OpenAPI app, and the app must have "
+            "permission to call this API."
+        )
+    return message
+
+
 @dataclass(frozen=True)
 class ResourceGrant:
     kind: str
@@ -142,7 +160,7 @@ class ATrustClient:
                 raw = resp.read().decode("utf-8")
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"HTTP {exc.code} {method} {path}: {detail}") from exc
+            raise RuntimeError(build_http_error_message(exc.code, method, path, detail)) from exc
         except URLError as exc:
             raise RuntimeError(f"Request failed {method} {path}: {exc}") from exc
 

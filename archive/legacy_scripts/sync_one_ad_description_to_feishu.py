@@ -36,6 +36,15 @@ def parse_args() -> argparse.Namespace:
         description="Sync one AD user's grants to Feishu by AD description / Feishu user_id."
     )
     parser.add_argument("--ad-description", required=True, help="AD description value, for example HCXXXXXXXX.")
+    parser.add_argument(
+        "--feishu-match-field",
+        default=FEISHU_MATCH_FIELD,
+        help="Feishu user field matched against the AD description. Default: user_id.",
+    )
+    parser.add_argument(
+        "--feishu-match-value",
+        help="Value to search in --feishu-match-field. Default: same as --ad-description.",
+    )
     parser.add_argument("--config", default=DEFAULT_CONFIG_FILE, help="JSON config file path.")
     parser.add_argument("--base-url", help="aTrust base URL, for example https://1.1.1.1:4433")
     parser.add_argument("--api-id", help="OpenAPI API ID")
@@ -109,6 +118,13 @@ def find_unique_user(
     matches = [user for user in users if normalize_value(field, user.get(field)) == target]
     if not matches:
         print(f"No {label} user found where {field}={value}.", file=sys.stderr)
+        if label == "Feishu" and field == FEISHU_MATCH_FIELD:
+            print(
+                "If this user exists in Feishu, confirm which aTrust field stores the employee number "
+                "and retry with --feishu-match-field, for example name, displayName, externalId, "
+                "email, phone, or description.",
+                file=sys.stderr,
+            )
         return None
     if len(matches) > 1:
         print(f"Multiple {label} users found where {field}={value}; refusing to sync.", file=sys.stderr)
@@ -133,7 +149,7 @@ def build_grant_rows(
                 "ad_description": match.ad_user.get(AD_MATCH_FIELD),
                 "feishu_user_id": match.feishu_user.get("id"),
                 "feishu_user_name": match.feishu_user.get("name"),
-                "feishu_user_id_field": match.feishu_user.get(FEISHU_MATCH_FIELD),
+                "feishu_user_id_field": match.feishu_user.get(match.target_field or FEISHU_MATCH_FIELD),
                 "kind": grant.kind,
                 "resource_id": grant.resource_id,
                 "resource_name": grant.resource_name,
@@ -173,12 +189,13 @@ def main() -> int:
 
     print("Querying Feishu users...")
     feishu_users = client.query_users(args.feishu_domain)
-    feishu_user = find_unique_user(feishu_users, FEISHU_MATCH_FIELD, args.ad_description, "Feishu")
+    feishu_match_value = args.feishu_match_value or args.ad_description
+    feishu_user = find_unique_user(feishu_users, args.feishu_match_field, feishu_match_value, "Feishu")
     if not feishu_user:
         return 1
 
     match_value = normalize_value(AD_MATCH_FIELD, args.ad_description)
-    match = UserMatch(ad_user, feishu_user, AD_MATCH_FIELD, match_value, FEISHU_MATCH_FIELD)
+    match = UserMatch(ad_user, feishu_user, AD_MATCH_FIELD, match_value, args.feishu_match_field)
 
     print("Discovering this AD user's resource grants...")
     grants_by_ad_user = discover_ad_user_grants(
