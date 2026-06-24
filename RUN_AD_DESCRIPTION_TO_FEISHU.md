@@ -120,6 +120,12 @@ python .\sync_one_ad_description_to_feishu.py `
 python .\sync_one_ad_description_to_feishu.py --ad-description "HC21120015" --output-dir ".\output-one-ad-description-to-feishu"
 ```
 
+如果脚本提示 `No Feishu user found where user_id=HC21120015.`，说明 AD 用户已经查到了，但飞书目录里没有任何用户的 `user_id` 字段等于这个值。请先确认飞书用户在 aTrust 里存放工号的字段名；如果工号实际在 `name`、`displayName`、`externalId`、`email`、`phone` 或 `description` 等字段里，可以加 `--feishu-match-field` 指定字段，例如：
+
+```powershell
+python .\sync_one_ad_description_to_feishu.py --ad-description "HC21120015" --feishu-match-field "name" --output-dir ".\output-one-ad-description-to-feishu"
+```
+
 先 dry-run 验证某个工号：
 
 ```powershell
