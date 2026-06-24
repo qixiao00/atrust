@@ -53,6 +53,8 @@ atrust_feishu_config.json
 - 这个 OpenAPI 应用是否已启用，且有调用用户查询、资源查询和授权接口的权限。
 - 当前 `base_url` 是否指向生成这组 `api_id` / `api_secret` 的同一套 aTrust 环境。
 
+注意：`HTTP 401` 发生在接口鉴权阶段，通常还没有进入“按工号查用户”的业务查询逻辑。即使界面上能看到这个用户，只要 OpenAPI 应用鉴权失败，脚本也拿不到用户列表。
+
 `atrust_feishu_config.json` 已加入 `.gitignore`，不会被提交。
 
 ## 2. 批量统计和生成计划
