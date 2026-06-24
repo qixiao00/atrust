@@ -92,6 +92,30 @@ python .\sync_ad_description_to_feishu_user_id.py `
 
 脚本：`sync_one_ad_description_to_feishu.py`
 
+如果你是在 Windows PowerShell 里执行，有两种写法都可以：
+
+1. 使用仓库根目录下的真实脚本名：
+
+```powershell
+python .\sync_one_ad_description_to_feishu.py `
+  --ad-description "HC21120015" `
+  --output-dir ".\output-one-ad-description-to-feishu"
+```
+
+2. 如果你已经习惯使用 `sync` 子目录路径，也可以使用兼容入口：
+
+```powershell
+python .\sync\_one_ad_description_to_feishu.py `
+  --ad-description "HC21120015" `
+  --output-dir ".\output-one-ad-description-to-feishu"
+```
+
+注意：PowerShell 的换行符是反引号 `` ` ``，反引号必须是每一行最后一个字符，后面不能再有空格。否则建议直接写成一行：
+
+```powershell
+python .\sync\_one_ad_description_to_feishu.py --ad-description "HC21120015" --output-dir ".\output-one-ad-description-to-feishu"
+```
+
 先 dry-run 验证某个工号：
 
 ```powershell
