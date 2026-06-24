@@ -151,6 +151,43 @@ python .\sync_one_ad_description_to_feishu.py `
 
 ## 可选参数
 
+## 迁移成功 100 个用户后停止，并缓存授权明细
+
+如果只想先真实迁移一批用户，成功迁移到 100 个用户后自动停止，可以使用：
+
+```powershell
+python .\sync_first_100_ad_description_to_feishu.py `
+  --output-dir ".\output-first-100-ad-description-to-feishu" `
+  --execute
+```
+
+这个脚本仍然默认按 `AD.description -> 飞书.user_id` 匹配用户。它会先生成完整计划和缓存文件，再执行真实授权；成功授权的用户数达到 `--max-successful-users` 后停止，默认值是 `100`。
+
+重点输出文件：
+
+- `ad_authorized_grants.csv`：保留匹配成功且 AD 侧有授权资源的详细明细，包含 AD 用户、飞书用户、匹配字段、资源/应用分类、授权来源、有效期等信息。
+- `reassociate_users.csv`：后续执行计划需要的用户匹配结果。
+- `copied_grants.csv`：后续可复用的授权计划明细。
+- `assigned_grants.csv`：本次已经成功提交到飞书的授权明细。
+- `failed_grants.csv`：本次执行失败的用户。
+- `remaining_reassociate_users.csv` / `remaining_copied_grants.csv`：排除本次已成功迁移用户后的剩余计划，适合后续继续执行，避免重复处理前 100 个成功用户。
+
+如果后续想直接复用这次生成的 CSV，不再重新扫描 AD/飞书用户和资源授权，可以用原批量脚本的执行模式读取计划文件：
+
+```powershell
+python .\sync_ad_description_to_feishu_user_id.py `
+  --output-dir ".\output-first-100-ad-description-to-feishu" `
+  --confirmed-file ".\output-first-100-ad-description-to-feishu\remaining_reassociate_users.csv" `
+  --planned-grants-file ".\output-first-100-ad-description-to-feishu\remaining_copied_grants.csv" `
+  --execute
+```
+
+如需改成成功迁移 50 个或 200 个用户后停止，可以加：
+
+```powershell
+python .\sync_first_100_ad_description_to_feishu.py ... --max-successful-users 50 --execute
+```
+
 只处理部分应用：
 
 ```powershell
