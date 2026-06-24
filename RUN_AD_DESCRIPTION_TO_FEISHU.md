@@ -47,6 +47,12 @@ atrust_feishu_config.json
 - 如果控制台地址是 `https://atrust.company.com:4433`，则填 `"base_url": "https://atrust.company.com:4433"`
 - 如果控制台就是标准 HTTPS 端口 443，也可以填 `"base_url": "https://atrust.company.com"`
 
+如果运行时报 `HTTP 401`、`AuthFailed.OpenAPI` 或 `openAPI请求失败，配置获取失败`，说明已经连到 aTrust 了，但 OpenAPI 鉴权没有通过。请重点检查：
+
+- `api_id` 和 `api_secret` 是否从同一个 OpenAPI 应用复制，是否多复制了空格。
+- 这个 OpenAPI 应用是否已启用，且有调用用户查询、资源查询和授权接口的权限。
+- 当前 `base_url` 是否指向生成这组 `api_id` / `api_secret` 的同一套 aTrust 环境。
+
 `atrust_feishu_config.json` 已加入 `.gitignore`，不会被提交。
 
 ## 2. 批量统计和生成计划
