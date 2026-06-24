@@ -1,15 +1,28 @@
-# AD description 到飞书 user_id 资源关联同步
+# AD description 到飞书 description 资源授权同步
 
-专用脚本：`sync_ad_description_to_feishu_user_id.py`
+当前只保留这一套正式流程：使用 **AD 域控用户的 `description` 字段** 匹配 **飞书用户目录的 `description` 字段**，并把 AD 用户已有的应用/应用分类授权追加到对应飞书用户。
 
-用途：把 AD 域用户当前关联的应用/应用分类授权，同步追加到飞书用户目录中对应用户。匹配规则固定为：
+历史 demo、旧版 `user_id` 匹配脚本、单用户直连扫描脚本已经放入：
 
-- AD 用户字段：`description`
-- 飞书用户字段：`user_id`
-- 两边字段值都形如 `HCXXXXXXXX`
-- AD `description` 为空的用户会跳过，不参与迁移
+```text
+archive/legacy_scripts/
+```
 
-脚本默认 dry-run，不会修改线上授权。确认 `reassociate_users.csv` 后，再执行真实授权。
+## 目录结构
+
+```text
+scripts/01_precheck/generate_ad_authorized_grants.py   # 前置脚本：扫描并生成 CSV
+scripts/02_test/migrate_one_user_from_csv.py           # 测试脚本：从 CSV 迁移一个用户
+scripts/03_production/migrate_all_from_csv.py          # 正式脚本：从 CSV 迁移全部用户
+```
+
+每类脚本默认把产物放到自己的目录：
+
+```text
+output-precheck-ad-description-to-feishu-description/
+output-test-one-user-from-csv/
+output-production-from-csv/
+```
 
 ## 1. 配置连接信息
 
@@ -19,21 +32,13 @@
 atrust_feishu_config.json
 ```
 
-当前配置文件已包含：
-
-- OpenAPI API ID
-- OpenAPI API Secret
-- AD 目录：`ad13382`
-- 飞书目录：`feishu86454`
-- `max_ops_per_second`: `8`
-
-还需要把 `base_url` 补成实际 aTrust 控制台地址，也就是你平时浏览器打开 aTrust 管理后台时使用的协议、IP/域名和端口。只填到端口即可，不要带 `/api/...` 这类接口路径。例如：
+需要配置：
 
 ```json
 {
   "base_url": "https://atrust.example.com:4433",
-  "api_id": "...",
-  "api_secret": "...",
+  "api_id": "YOUR_API_ID",
+  "api_secret": "YOUR_API_SECRET",
   "ad_domain": "ad13382",
   "feishu_domain": "feishu86454",
   "insecure": true,
@@ -41,173 +46,115 @@ atrust_feishu_config.json
 }
 ```
 
-常见填写示例：
+`base_url` 填你平时浏览器打开 aTrust 管理后台时使用的协议、IP/域名和端口，只填到端口即可，不要带 `/api/...` 这类接口路径。
 
-- 如果控制台地址是 `https://10.10.10.10:4433/console`，则填 `"base_url": "https://10.10.10.10:4433"`
-- 如果控制台地址是 `https://atrust.company.com:4433`，则填 `"base_url": "https://atrust.company.com:4433"`
-- 如果控制台就是标准 HTTPS 端口 443，也可以填 `"base_url": "https://atrust.company.com"`
+示例：
 
-如果运行时报 `HTTP 401`、`AuthFailed.OpenAPI` 或 `openAPI请求失败，配置获取失败`，说明已经连到 aTrust 了，但 OpenAPI 鉴权没有通过。请重点检查：
+- 控制台地址是 `https://10.10.10.10:4433/console`，则填 `"base_url": "https://10.10.10.10:4433"`
+- 控制台地址是 `https://atrust.company.com:4433`，则填 `"base_url": "https://atrust.company.com:4433"`
+- 标准 HTTPS 端口 443，则填 `"base_url": "https://atrust.company.com"`
+
+## 2. 前置脚本：生成 AD 授权资源明细 CSV
+
+这个脚本会：
+
+1. 拉取 AD 用户目录。
+2. 拉取飞书用户目录。
+3. 按 `AD.description -> 飞书.description` 匹配用户。
+4. 扫描匹配成功的 AD 用户已有的资源授权。
+5. 生成 `ad_authorized_grants.csv`，后续测试和正式脚本都直接读取这个 CSV，不再重复扫描资源授权。
+
+运行：
+
+```powershell
+python .\scripts\01_precheck\generate_ad_authorized_grants.py
+```
+
+默认输出目录：
+
+```text
+output-precheck-ad-description-to-feishu-description/
+```
+
+重点输出文件：
+
+- `ad_authorized_grants.csv`：AD 侧有授权资源的详细信息，包含 AD 用户、飞书用户、匹配字段、资源/应用分类、授权来源、有效期等字段。
+- `matched_users_with_grants.csv`：匹配成功且有授权资源的用户汇总。
+- `unmatched_ad_users.csv`：AD 有 description 但没有匹配到飞书 description 的用户。
+- `ambiguous_ad_users.csv`：飞书侧 description 重复导致无法唯一匹配的用户。
+
+## 3. 测试脚本：根据 CSV 迁移一个用户
+
+先 dry-run，不会真实授权：
+
+```powershell
+python .\scripts\02_test\migrate_one_user_from_csv.py `
+  --grant-csv ".\output-precheck-ad-description-to-feishu-description\ad_authorized_grants.csv" `
+  --ad-description "HC21120015"
+```
+
+确认后执行真实授权：
+
+```powershell
+python .\scripts\02_test\migrate_one_user_from_csv.py `
+  --grant-csv ".\output-precheck-ad-description-to-feishu-description\ad_authorized_grants.csv" `
+  --ad-description "HC21120015" `
+  --execute
+```
+
+默认输出目录：
+
+```text
+output-test-one-user-from-csv/
+```
+
+输出文件：
+
+- `one_user_assigned_grants.csv`：dry-run 计划或真实已提交的授权明细。
+- `one_user_failed.csv`：这个用户执行失败的错误信息。
+
+## 4. 正式脚本：根据 CSV 迁移全部权限
+
+先 dry-run，不会真实授权：
+
+```powershell
+python .\scripts\03_production\migrate_all_from_csv.py `
+  --grant-csv ".\output-precheck-ad-description-to-feishu-description\ad_authorized_grants.csv"
+```
+
+确认后执行真实授权：
+
+```powershell
+python .\scripts\03_production\migrate_all_from_csv.py `
+  --grant-csv ".\output-precheck-ad-description-to-feishu-description\ad_authorized_grants.csv" `
+  --execute
+```
+
+默认输出目录：
+
+```text
+output-production-from-csv/
+```
+
+输出文件：
+
+- `all_assigned_grants.csv`：dry-run 计划或真实已提交的授权明细。
+- `all_failed.csv`：执行失败的用户和错误信息。
+
+## 5. 常见问题
+
+### HTTP 401 / AuthFailed.OpenAPI
+
+如果运行时报 `HTTP 401`、`AuthFailed.OpenAPI` 或 `openAPI请求失败，配置获取失败`，说明已经连到 aTrust 了，但 OpenAPI 鉴权没有通过。请检查：
 
 - `api_id` 和 `api_secret` 是否从同一个 OpenAPI 应用复制，是否多复制了空格。
 - 这个 OpenAPI 应用是否已启用，且有调用用户查询、资源查询和授权接口的权限。
 - 当前 `base_url` 是否指向生成这组 `api_id` / `api_secret` 的同一套 aTrust 环境。
 
-注意：`HTTP 401` 发生在接口鉴权阶段，通常还没有进入“按工号查用户”的业务查询逻辑。即使界面上能看到这个用户，只要 OpenAPI 应用鉴权失败，脚本也拿不到用户列表。
+### 匹配不到用户
 
-`atrust_feishu_config.json` 已加入 `.gitignore`，不会被提交。
+当前流程固定按 `AD.description -> 飞书.description` 匹配。若匹配不到，请检查：
 
-## 2. 批量统计和生成计划
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py `
-  --output-dir ".\output-ad-description-to-feishu"
-```
-
-如果没有在配置文件里写 `base_url`，也可以运行时传：
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py `
-  --base-url "https://atrust.example.com:4433" `
-  --output-dir ".\output-ad-description-to-feishu"
-```
-
-重点看控制台输出：
-
-- `AD users skipped because description is empty`：AD 没有工号、已跳过的用户数
-- `Users needing resource reassociation`：需要重新关联资源的用户数
-- `Grant rows planned`：计划追加的授权明细行数
-
-## 3. 确认输出文件
-
-输出目录里重点确认这两个文件：
-
-- `reassociate_users.csv`：需要重新关联资源的用户清单，一行一个用户
-- `copied_grants.csv`：计划追加的资源授权明细，一行一条应用或应用分类授权
-
-如果需要排除某些用户，可以从 `reassociate_users.csv` 删除对应行后再执行。
-
-## 4. 批量确认后执行
-
-执行阶段会读取上一步生成的 CSV，不会重新扫描用户目录和资源授权，尽量节省 aTrust OPS。
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py `
-  --output-dir ".\output-ad-description-to-feishu" `
-  --execute
-```
-
-执行结果：
-
-- `assigned_grants.csv`：已提交追加授权的明细
-- `failed_grants.csv`：失败的用户授权记录
-
-## 单用户验证
-
-脚本：`sync_one_ad_description_to_feishu.py`
-
-如果你是在 Windows PowerShell 里执行，需要使用仓库根目录下的真实脚本名：
-
-```powershell
-python .\sync_one_ad_description_to_feishu.py `
-  --ad-description "HC21120015" `
-  --output-dir ".\output-one-ad-description-to-feishu"
-```
-
-注意：PowerShell 的换行符是反引号 `` ` ``，反引号必须是每一行最后一个字符，后面不能再有空格。否则建议直接写成一行：
-
-```powershell
-python .\sync_one_ad_description_to_feishu.py --ad-description "HC21120015" --output-dir ".\output-one-ad-description-to-feishu"
-```
-
-如果脚本提示 `No Feishu user found where user_id=HC21120015.`，说明 AD 用户已经查到了，但飞书目录里没有任何用户的 `user_id` 字段等于这个值。请先确认飞书用户在 aTrust 里存放工号的字段名；如果工号实际在 `name`、`displayName`、`externalId`、`email`、`phone` 或 `description` 等字段里，可以加 `--feishu-match-field` 指定字段，例如：
-
-```powershell
-python .\sync_one_ad_description_to_feishu.py --ad-description "HC21120015" --feishu-match-field "name" --output-dir ".\output-one-ad-description-to-feishu"
-```
-
-先 dry-run 验证某个工号：
-
-```powershell
-python .\sync_one_ad_description_to_feishu.py `
-  --ad-description "HCXXXXXXXX" `
-  --output-dir ".\output-one-ad-description-to-feishu"
-```
-
-确认后只给这个用户追加授权：
-
-```powershell
-python .\sync_one_ad_description_to_feishu.py `
-  --ad-description "HCXXXXXXXX" `
-  --output-dir ".\output-one-ad-description-to-feishu" `
-  --execute
-```
-
-输出文件：
-
-- `single_user_match.csv`：AD 用户和飞书用户的匹配结果
-- `single_user_grants.csv`：该 AD 用户的授权明细
-- `single_user_failed.csv`：执行失败记录
-
-## 可选参数
-
-## 迁移成功 100 个用户后停止，并缓存授权明细
-
-如果只想先真实迁移一批用户，成功迁移到 100 个用户后自动停止，可以使用：
-
-```powershell
-python .\sync_first_100_ad_description_to_feishu.py `
-  --output-dir ".\output-first-100-ad-description-to-feishu" `
-  --execute
-```
-
-这个脚本仍然默认按 `AD.description -> 飞书.user_id` 匹配用户。它会先生成完整计划和缓存文件，再执行真实授权；成功授权的用户数达到 `--max-successful-users` 后停止，默认值是 `100`。
-
-重点输出文件：
-
-- `ad_authorized_grants.csv`：保留匹配成功且 AD 侧有授权资源的详细明细，包含 AD 用户、飞书用户、匹配字段、资源/应用分类、授权来源、有效期等信息。
-- `reassociate_users.csv`：后续执行计划需要的用户匹配结果。
-- `copied_grants.csv`：后续可复用的授权计划明细。
-- `assigned_grants.csv`：本次已经成功提交到飞书的授权明细。
-- `failed_grants.csv`：本次执行失败的用户。
-- `remaining_reassociate_users.csv` / `remaining_copied_grants.csv`：排除本次已成功迁移用户后的剩余计划，适合后续继续执行，避免重复处理前 100 个成功用户。
-
-如果后续想直接复用这次生成的 CSV，不再重新扫描 AD/飞书用户和资源授权，可以用原批量脚本的执行模式读取计划文件：
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py `
-  --output-dir ".\output-first-100-ad-description-to-feishu" `
-  --confirmed-file ".\output-first-100-ad-description-to-feishu\remaining_reassociate_users.csv" `
-  --planned-grants-file ".\output-first-100-ad-description-to-feishu\remaining_copied_grants.csv" `
-  --execute
-```
-
-如需改成成功迁移 50 个或 200 个用户后停止，可以加：
-
-```powershell
-python .\sync_first_100_ad_description_to_feishu.py ... --max-successful-users 50 --execute
-```
-
-只处理部分应用：
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py ... --resource-id-file .\resource_ids.txt
-```
-
-只处理部分应用分类：
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py ... --resource-group-id-file .\resource_group_ids.txt
-```
-
-只同步应用，不同步应用分类：
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py ... --skip-resource-groups
-```
-
-只同步直接授权，不同步角色继承授权：
-
-```powershell
-python .\sync_ad_description_to_feishu_user_id.py ... --direct-only
-```
+- AD 用户的 `description` 是否为空。
+- 飞书用户的 `description` 是否和 AD `description` 完全一致。
+- 飞书侧是否存在多个相同 `description`，如果重复会进入 `ambiguous_ad_users.csv`。
