@@ -27,7 +27,7 @@ atrust_feishu_config.json
 - 飞书目录：`feishu86454`
 - `max_ops_per_second`: `8`
 
-还需要把 `base_url` 补成实际 aTrust 控制台地址，例如：
+还需要把 `base_url` 补成实际 aTrust 控制台地址，也就是你平时浏览器打开 aTrust 管理后台时使用的协议、IP/域名和端口。只填到端口即可，不要带 `/api/...` 这类接口路径。例如：
 
 ```json
 {
@@ -40,6 +40,12 @@ atrust_feishu_config.json
   "max_ops_per_second": 8.0
 }
 ```
+
+常见填写示例：
+
+- 如果控制台地址是 `https://10.10.10.10:4433/console`，则填 `"base_url": "https://10.10.10.10:4433"`
+- 如果控制台地址是 `https://atrust.company.com:4433`，则填 `"base_url": "https://atrust.company.com:4433"`
+- 如果控制台就是标准 HTTPS 端口 443，也可以填 `"base_url": "https://atrust.company.com"`
 
 `atrust_feishu_config.json` 已加入 `.gitignore`，不会被提交。
 
