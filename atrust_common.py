@@ -275,9 +275,9 @@ class ATrustClient:
 
     def query_group_by_full_path(self, directory_domain: str, full_path: str) -> dict[str, Any]:
         payload = self.request(
-            "POST",
+            "GET",
             "/api/v3/group/queryByFullPath",
-            body={
+            query={
                 "directoryDomain": directory_domain,
                 "fullPath": full_path,
             },

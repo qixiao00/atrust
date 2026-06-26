@@ -65,11 +65,16 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated Feishu fields matched against AD description, in priority order.",
     )
     parser.add_argument("--skip-resource-groups", action="store_true", help="Do not include application categories.")
-    parser.add_argument("--direct-only", action="store_true", help="Do not include role-derived grants.")
+    parser.add_argument("--direct-only", action="store_true", help="Only include direct user grants; skip role-derived grants.")
     parser.add_argument(
         "--skip-org-grants",
         action="store_true",
-        help="Do not query AD groupPath details for organization-derived grants.",
+        help="Deprecated compatibility flag. Organization grants are skipped by default.",
+    )
+    parser.add_argument(
+        "--include-org-grants",
+        action="store_true",
+        help="Include AD organization-derived grants by querying groupPath details. Off by default to save OPS.",
     )
     parser.add_argument(
         "--full",
@@ -236,7 +241,7 @@ def main() -> int:
         include_roles=not args.direct_only,
         resource_ids=parse_id_file(args.resource_id_file),
         group_ids=parse_id_file(args.resource_group_id_file),
-        include_orgs=not args.skip_org_grants,
+        include_orgs=args.include_org_grants and not args.skip_org_grants,
         stop_after_users=sample_limit,
     )
 
@@ -313,6 +318,9 @@ def main() -> int:
         "ambiguous_ad_users": len(ambiguous),
         "users_with_authorized_grants": len(user_rows),
         "authorized_grant_rows": len(grant_rows),
+        "include_org_grants": args.include_org_grants and not args.skip_org_grants,
+        "include_role_grants": not args.direct_only,
+        "include_resource_groups": not args.skip_resource_groups,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_filename = "summary.json" if args.full else "summary_10.json"

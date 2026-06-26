@@ -92,6 +92,8 @@ summary_10.json              样本模式统计
 python .\01_prepare_ad_authorized_grants.py --full
 ```
 
+默认不会扫描 AD 组织架构授权。客户后续手动按组织架构重新授权时，保持默认即可。
+
 全量产物目录：
 
 ```text
@@ -107,6 +109,16 @@ unmatched_ad_users.csv    AD description 无法匹配到飞书 user_id / externa
 ambiguous_ad_users.csv    飞书匹配标识不唯一，无法安全迁移的 AD 用户
 summary.json              全量统计
 ```
+
+`summary.json` 里需要重点区分两个数字：
+
+```text
+matched_by_description        AD description 能唯一匹配到飞书 user_id/externalId 的人数，只代表身份能对应
+users_with_authorized_grants  真正在 AD 侧找到资源授权、会写入迁移 CSV 的人数
+authorized_grant_rows         需要迁移的授权明细行数
+```
+
+所以看到 `matched_by_description` 有 4600 多是正常的，它不表示 4600 多人都有资源要迁移。真正需要迁移的人数看 `users_with_authorized_grants`。
 
 ## 2. 测试脚本
 
@@ -304,6 +316,16 @@ python .\01_prepare_ad_authorized_grants.py --skip-resource-groups
 python .\01_prepare_ad_authorized_grants.py --direct-only
 ```
 
+OPS 更省的推荐方式：
+
+```powershell
+python .\01_prepare_ad_authorized_grants.py --full --direct-only
+```
+
+这个模式只迁移 AD 用户直接授权，不扫描角色继承授权；组织架构授权默认已经跳过。
+如果仍然需要角色继承授权，不要加 `--direct-only`。
+如果应用分类授权不需要迁移，可以再加 `--skip-resource-groups`，这样不会调用应用分类授权查询接口。
+
 ## 长时间运行防睡眠
 
 Windows 锁屏通常不会中断正在运行的 Python 脚本。真正需要避免的是电脑进入睡眠/休眠。项目里提供了一个包装脚本：
@@ -334,12 +356,11 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ## 授权来源说明
 
-前置脚本默认会纳入三类 AD 侧授权来源：
+前置脚本默认会纳入两类 AD 侧授权来源：
 
 ```text
 user  用户直接授权
 band  角色/用户组继承授权
-AD 组织架构授权  通过 AD 部门/组织节点继承的授权
 ```
 
 角色授权是否会迁移：
@@ -350,16 +371,25 @@ AD 组织架构授权  通过 AD 部门/组织节点继承的授权
 
 组织架构授权如何处理：
 
+- 当前默认不迁移 AD 组织架构授权，客户手动按组织架构重新授权。
 - 不会迁移 AD 组织架构本身，也不会尝试把 AD 组织节点映射成飞书组织节点。
 - 因为 AD 和飞书的组织树不一致，正式脚本只会逐个给飞书用户追加资源授权。
-- 前置脚本会读取 AD 用户的 `groupPath`，调用组织架构详情接口查询该组织路径上的 `resourceIdList`、`resourceGroupIdList` 和 `roleIdList`。
+- 只有显式加 `--include-org-grants` 时，前置脚本才会读取 AD 用户的 `groupPath`，调用组织架构详情接口查询该组织路径上的 `resourceIdList`、`resourceGroupIdList` 和 `roleIdList`。
 - `resourceIdList` 和 `resourceGroupIdList` 会直接展开成这个 AD 用户实际继承到的资源。
 - 组织上的 `roleIdList` 会并入角色继承映射，再通过 `entityType=band` 找到角色带来的资源。
 - 展开后的结果写入 `ad_authorized_grants*.csv`，后续测试/正式脚本只根据 CSV 里的 `feishu_user_id` 对飞书用户逐一授权。
 - CSV 中仍然看 `grant_source_type` 字段；如果来源是 AD 组织详情接口里的资源数组，这里会显示 `group`。
 
-如果只想临时排除 AD 组织架构来源的资源：
+如果以后临时需要把 AD 组织架构来源也纳入：
 
 ```powershell
-python .\01_prepare_ad_authorized_grants.py --skip-org-grants
+python .\01_prepare_ad_authorized_grants.py --full --include-org-grants
 ```
+
+## 授权安全边界
+
+本项目只追加授权，不删除、不覆盖、不清空已有授权。
+
+- 前置脚本只读取 AD 和飞书目录及授权关系，生成 CSV。
+- 测试脚本和正式脚本不加 `--execute` 时只是 dry-run。
+- 加 `--execute` 后调用的是 `user/assignResourceById`，脚本传入 `op: append`，只会把 CSV 里的资源追加到飞书用户。
