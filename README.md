@@ -304,6 +304,34 @@ python .\01_prepare_ad_authorized_grants.py --skip-resource-groups
 python .\01_prepare_ad_authorized_grants.py --direct-only
 ```
 
+## 长时间运行防睡眠
+
+Windows 锁屏通常不会中断正在运行的 Python 脚本。真正需要避免的是电脑进入睡眠/休眠。项目里提供了一个包装脚本：
+
+```text
+tools/run_no_sleep.ps1
+```
+
+它只请求 Windows 在命令运行期间不要睡眠，不模拟鼠标或键盘，也不修改域控锁屏策略。
+
+示例：前置全量扫描时防睡眠：
+
+```powershell
+.\tools\run_no_sleep.ps1 python .\01_prepare_ad_authorized_grants.py --full
+```
+
+示例：正式迁移时防睡眠：
+
+```powershell
+.\tools\run_no_sleep.ps1 python .\03_migrate_all_from_csv.py --execute
+```
+
+如果 PowerShell 执行策略拦截本地脚本，可以只对当前进程临时放开：
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
 ## 授权来源说明
 
 前置脚本默认会纳入三类 AD 侧授权来源：
