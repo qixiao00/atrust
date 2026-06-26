@@ -40,6 +40,7 @@ class UserPair:
     ad_user: dict[str, Any]
     feishu_user: dict[str, Any]
     match_value: str
+    match_target_field: str
 
 
 def compact_json(data: Any) -> str:
@@ -356,11 +357,17 @@ def index_unique_users(
     return index, duplicates
 
 
-def match_by_description(
+def match_ad_description_to_feishu_identifiers(
     ad_users: list[dict[str, Any]],
     feishu_users: list[dict[str, Any]],
+    feishu_fields: list[str] | None = None,
 ) -> tuple[list[UserPair], list[dict[str, Any]], list[dict[str, Any]]]:
-    feishu_index, feishu_duplicates = index_unique_users(feishu_users, "description")
+    fields = feishu_fields or ["user_id", "use_id", "externalId", "external_id"]
+    indexes: dict[str, dict[str, dict[str, Any]]] = {}
+    duplicates_by_field: dict[str, set[str]] = {}
+    for field in fields:
+        indexes[field], duplicates_by_field[field] = index_unique_users(feishu_users, field)
+
     pairs: list[UserPair] = []
     unmatched: list[dict[str, Any]] = []
     ambiguous: list[dict[str, Any]] = []
@@ -373,28 +380,54 @@ def match_by_description(
             row["_reason"] = "empty_ad_description"
             unmatched.append(row)
             continue
-        if value in feishu_duplicates:
+
+        duplicate_fields = [field for field in fields if value in duplicates_by_field[field]]
+        if duplicate_fields:
             row = dict(ad_user)
-            row["_reason"] = "duplicate_feishu_description"
-            row["_duplicate_keys"] = f"description={value}"
+            row["_reason"] = "duplicate_feishu_identifier"
+            row["_duplicate_keys"] = ";".join(f"{field}={value}" for field in duplicate_fields)
             ambiguous.append(row)
             continue
-        feishu_user = feishu_index.get(value)
+
+        feishu_user: dict[str, Any] | None = None
+        matched_field = ""
+        for field in fields:
+            candidate = indexes[field].get(value)
+            if candidate:
+                feishu_user = candidate
+                matched_field = field
+                break
         if not feishu_user:
             row = dict(ad_user)
-            row["_reason"] = "no_feishu_description_match"
+            row["_reason"] = "no_feishu_identifier_match"
+            row["_checked_fields"] = ",".join(fields)
             unmatched.append(row)
             continue
+
         feishu_id = str(feishu_user.get("id") or "")
         if feishu_id in used_feishu_ids:
             row = dict(ad_user)
             row["_reason"] = "duplicate_ad_match_to_same_feishu_user"
-            row["_duplicate_keys"] = f"description={value}"
+            row["_duplicate_keys"] = f"{matched_field}={value}"
             ambiguous.append(row)
             continue
         used_feishu_ids.add(feishu_id)
-        pairs.append(UserPair(ad_user=ad_user, feishu_user=feishu_user, match_value=value))
+        pairs.append(
+            UserPair(
+                ad_user=ad_user,
+                feishu_user=feishu_user,
+                match_value=value,
+                match_target_field=matched_field,
+            )
+        )
     return pairs, unmatched, ambiguous
+
+
+def match_by_description(
+    ad_users: list[dict[str, Any]],
+    feishu_users: list[dict[str, Any]],
+) -> tuple[list[UserPair], list[dict[str, Any]], list[dict[str, Any]]]:
+    return match_ad_description_to_feishu_identifiers(ad_users, feishu_users)
 
 
 def discover_user_grants(
