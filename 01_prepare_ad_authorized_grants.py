@@ -16,6 +16,7 @@ from atrust_common import (
     discover_user_grants,
     match_ad_description_to_feishu_identifiers,
     normalize_value,
+    parse_csv_arg,
     parse_id_file,
     require_config_values,
     write_csv,
@@ -66,6 +67,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--skip-resource-groups", action="store_true", help="Do not include application categories.")
     parser.add_argument("--direct-only", action="store_true", help="Do not include role-derived grants.")
+    parser.add_argument(
+        "--skip-org-grants",
+        action="store_true",
+        help="Do not expand AD organization/dept-derived grants into per-user grant rows.",
+    )
+    parser.add_argument(
+        "--org-entity-types",
+        default=None,
+        help="Comma-separated AD assignment entityType values for organization/dept grants.",
+    )
+    parser.add_argument(
+        "--org-user-fields",
+        default=None,
+        help="Comma-separated AD user fields that contain AD organization/dept IDs.",
+    )
     parser.add_argument(
         "--full",
         action="store_true",
@@ -230,6 +246,9 @@ def main() -> int:
         include_roles=not args.direct_only,
         resource_ids=parse_id_file(args.resource_id_file),
         group_ids=parse_id_file(args.resource_group_id_file),
+        include_orgs=not args.skip_org_grants,
+        org_entity_types=parse_csv_arg(args.org_entity_types, []),
+        org_user_fields=parse_csv_arg(args.org_user_fields, []),
         stop_after_users=sample_limit,
     )
 

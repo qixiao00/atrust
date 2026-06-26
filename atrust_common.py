@@ -21,6 +21,28 @@ from urllib.request import Request, urlopen
 
 PAGE_SIZE = 5000
 DEFAULT_CONFIG_FILE = "atrust_feishu_config.json"
+DEFAULT_ORG_ENTITY_TYPES = ["department", "dept", "org", "organization"]
+DEFAULT_ORG_USER_FIELDS = [
+    "departmentId",
+    "department_id",
+    "deptId",
+    "dept_id",
+    "orgId",
+    "org_id",
+    "organizationId",
+    "organization_id",
+    "ouId",
+    "ou_id",
+    "departmentIdList",
+    "deptIdList",
+    "orgIdList",
+    "organizationIdList",
+    "departments",
+    "departmentList",
+    "deptList",
+    "orgList",
+    "organizationList",
+]
 
 
 @dataclass(frozen=True)
@@ -325,6 +347,12 @@ def parse_id_file(path: str | None) -> set[str] | None:
     return values
 
 
+def parse_csv_arg(value: str | None, default: list[str]) -> list[str]:
+    if value is None:
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as fp:
@@ -355,6 +383,53 @@ def index_unique_users(
         if count > 1:
             duplicates.add(value)
     return index, duplicates
+
+
+def collect_identity_values(value: Any) -> set[str]:
+    values: set[str] = set()
+    if value is None:
+        return values
+    if isinstance(value, (str, int, float)):
+        text = str(value).strip()
+        if text:
+            values.add(text)
+        return values
+    if isinstance(value, dict):
+        for key in (
+            "id",
+            "value",
+            "departmentId",
+            "department_id",
+            "deptId",
+            "dept_id",
+            "orgId",
+            "org_id",
+            "organizationId",
+            "organization_id",
+            "ouId",
+            "ou_id",
+        ):
+            values.update(collect_identity_values(value.get(key)))
+        return values
+    if isinstance(value, list):
+        for item in value:
+            values.update(collect_identity_values(item))
+        return values
+    return values
+
+
+def build_org_to_users(
+    users: list[dict[str, Any]],
+    org_user_fields: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    org_to_users: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for user in users:
+        seen_values: set[str] = set()
+        for field in org_user_fields:
+            seen_values.update(collect_identity_values(user.get(field)))
+        for value in seen_values:
+            org_to_users[value].append(user)
+    return org_to_users
 
 
 def match_ad_description_to_feishu_identifiers(
@@ -438,6 +513,9 @@ def discover_user_grants(
     include_roles: bool,
     resource_ids: set[str] | None,
     group_ids: set[str] | None,
+    include_orgs: bool = True,
+    org_entity_types: list[str] | None = None,
+    org_user_fields: list[str] | None = None,
     stop_after_users: int | None = None,
 ) -> dict[str, list[ResourceGrant]]:
     grants_by_user: dict[str, list[ResourceGrant]] = defaultdict(list)
@@ -450,6 +528,30 @@ def discover_user_grants(
                 role_to_users[str(role_id)].append(user)
 
     entity_types = ["user", "band"] if include_roles else ["user"]
+    org_types = org_entity_types or DEFAULT_ORG_ENTITY_TYPES
+    org_to_users: dict[str, list[dict[str, Any]]] = {}
+    if include_orgs:
+        entity_types.extend(org_types)
+        org_to_users = build_org_to_users(ad_users, org_user_fields or DEFAULT_ORG_USER_FIELDS)
+
+    base_entity_types = ["user", "band"] if include_roles else ["user"]
+    warned_org_entity_type_failure = False
+
+    def query_assignments_safely(path: str, rid: str) -> list[dict[str, Any]]:
+        nonlocal warned_org_entity_type_failure
+        try:
+            return client.query_assignments(path, rid, entity_types)
+        except RuntimeError:
+            if not include_orgs:
+                raise
+            if not warned_org_entity_type_failure:
+                print(
+                    "Warning: aTrust rejected the configured AD organization entity types; "
+                    "retrying with user/band only. Use --org-entity-types to set the actual AD values."
+                )
+                warned_org_entity_type_failure = True
+            return client.query_assignments(path, rid, base_entity_types)
+
     resources = client.query_resources()
     if resource_ids is not None:
         resources = [r for r in resources if str(r.get("id")) in resource_ids]
@@ -457,7 +559,7 @@ def discover_user_grants(
         rid = str(resource.get("id") or "")
         if not rid:
             continue
-        assignments = client.query_assignments("/api/v3/resourceAssign/queryById", rid, entity_types)
+        assignments = query_assignments_safely("/api/v3/resourceAssign/queryById", rid)
         for assignment in assignments:
             append_assignment_grant(
                 grants_by_user,
@@ -468,6 +570,8 @@ def discover_user_grants(
                 resource_name=str(resource.get("name") or ""),
                 ad_user_ids=ad_user_ids,
                 role_to_users=role_to_users,
+                org_to_users=org_to_users,
+                org_entity_types=set(org_types),
             )
             if stop_after_users and len(grants_by_user) >= stop_after_users:
                 return grants_by_user
@@ -480,7 +584,7 @@ def discover_user_grants(
             gid = str(group.get("id") or "")
             if not gid:
                 continue
-            assignments = client.query_assignments("/api/v3/resourceGroupAssign/queryById", gid, entity_types)
+            assignments = query_assignments_safely("/api/v3/resourceGroupAssign/queryById", gid)
             for assignment in assignments:
                 append_assignment_grant(
                     grants_by_user,
@@ -491,6 +595,8 @@ def discover_user_grants(
                     resource_name=str(group.get("name") or ""),
                     ad_user_ids=ad_user_ids,
                     role_to_users=role_to_users,
+                    org_to_users=org_to_users,
+                    org_entity_types=set(org_types),
                 )
                 if stop_after_users and len(grants_by_user) >= stop_after_users:
                     return grants_by_user
@@ -507,6 +613,8 @@ def append_assignment_grant(
     resource_name: str,
     ad_user_ids: set[str],
     role_to_users: dict[str, list[dict[str, Any]]],
+    org_to_users: dict[str, list[dict[str, Any]]],
+    org_entity_types: set[str],
 ) -> None:
     source_id = str(assignment.get("id") or "")
     entity_type = str(assignment.get("entityType") or "")
@@ -514,6 +622,8 @@ def append_assignment_grant(
         target_user_ids = [source_id] if source_id in ad_user_ids else []
     elif entity_type == "band":
         target_user_ids = [str(user.get("id")) for user in role_to_users.get(source_id, []) if user.get("id")]
+    elif entity_type in org_entity_types:
+        target_user_ids = [str(user.get("id")) for user in org_to_users.get(source_id, []) if user.get("id")]
     else:
         target_user_ids = []
 

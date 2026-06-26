@@ -211,7 +211,7 @@ match_value          两边匹配命中的工号
 grant_kind           resource 表示应用，resourceGroup 表示应用分类
 resource_id          应用或应用分类 ID
 resource_name        应用或应用分类名称
-grant_source_type    user 表示用户直接授权，band 表示角色/用户组继承授权
+grant_source_type    AD 侧授权来源类型；user 是直接授权，band 是角色/用户组继承授权，department/dept/org/organization 等表示 AD 组织架构来源
 grant_source_id      授权来源 ID；直接授权时通常是 AD 用户 ID，继承授权时是角色/用户组 ID
 grant_source_name    授权来源名称
 effective_time       授权生效时间；为空表示源授权未返回该值
@@ -302,4 +302,48 @@ python .\01_prepare_ad_authorized_grants.py --resource-id-file .\resource_ids.tx
 python .\01_prepare_ad_authorized_grants.py --resource-group-id-file .\resource_group_ids.txt
 python .\01_prepare_ad_authorized_grants.py --skip-resource-groups
 python .\01_prepare_ad_authorized_grants.py --direct-only
+```
+
+## 授权来源说明
+
+前置脚本默认会纳入三类 AD 侧授权来源：
+
+```text
+user  用户直接授权
+band  角色/用户组继承授权
+AD 组织架构授权  通过 AD 部门/组织节点继承的授权
+```
+
+角色授权是否会迁移：
+
+- 会。脚本会读取 AD 用户的 `roleIdList`，再和资源授权里的 `entityType=band` 匹配。
+- 迁移时不会在飞书侧创建或绑定同名角色。
+- 迁移结果是把角色继承得到的应用/应用分类授权，作为资源授权追加给对应飞书用户。
+
+组织架构授权如何处理：
+
+- 不会迁移 AD 组织架构本身，也不会尝试把 AD 组织节点映射成飞书组织节点。
+- 因为 AD 和飞书的组织树不一致，正式脚本只会逐个给飞书用户追加资源授权。
+- 前置脚本会把 AD 资源授权里的组织/部门 entityType 展开到 AD 用户，得到“这个 AD 用户实际继承到了哪些资源”。
+- 展开后的结果写入 `ad_authorized_grants*.csv`，后续测试/正式脚本只根据 CSV 里的 `feishu_user_id` 对飞书用户逐一授权。
+- CSV 中仍然看 `grant_source_type` 字段；如果来源是 AD 组织架构授权，这里会显示 aTrust 返回的组织/部门类型，例如 `department`、`dept`、`org` 或 `organization`。
+
+如果 aTrust 环境里的 AD 组织 entityType 不是默认值，可以在前置脚本指定：
+
+```powershell
+python .\01_prepare_ad_authorized_grants.py `
+  --org-entity-types "department,dept,org,organization"
+```
+
+如果 AD 用户目录里保存 AD 部门/组织 ID 的字段名不是默认值，可以指定：
+
+```powershell
+python .\01_prepare_ad_authorized_grants.py `
+  --org-user-fields "departmentId,deptId,orgId,organizationId"
+```
+
+如果只想临时排除 AD 组织架构来源的资源：
+
+```powershell
+python .\01_prepare_ad_authorized_grants.py --skip-org-grants
 ```
