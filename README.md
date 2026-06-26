@@ -1,255 +1,149 @@
 # aTrust AD 到飞书资源授权同步
 
-本仓库包含脚本：`atrust_feishu_resource_sync.py`。
-
-脚本用途：
-
-1. 通过 aTrust OpenAPI 读取 AD 用户目录和飞书用户目录。
-2. 按工号、手机号、邮箱等稳定字段匹配同一个用户。
-3. 找出 AD 用户已经关联的应用和应用分类，包含直接授权和角色授权。
-4. 将同样的资源授权追加关联到匹配到的飞书用户。
-5. 输出匹配成功、未匹配、重复匹配、计划同步和同步失败结果。
-
-脚本默认是 dry-run，不会修改线上授权。确认 CSV 结果无误后，再加 `--execute` 执行真实授权。
-
-## 运行前准备
-
-需要准备以下信息：
-
-- aTrust OpenAPI 的 `api_id`
-- aTrust OpenAPI 的 `api_secret`
-- aTrust 控制台基础地址，例如 `https://atrust.example.com:4433`
-- AD 用户目录的 `directoryDomain`
-- 飞书用户目录的 `directoryDomain`
-- 两边用户都存在、且能唯一识别同一个人的字段，例如 `externalId`、`phone`、`email`
-
-`directoryDomain` 可以在 aTrust 用户目录配置或接口返回结果中确认，示例值类似 `custom01339`。
-
-## 先 dry-run
-
-```powershell
-python .\atrust_feishu_resource_sync.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --ad-domain "AD_DIRECTORY_DOMAIN" `
-  --feishu-domain "FEISHU_DIRECTORY_DOMAIN" `
-  --match-fields "externalId,phone,email" `
-  --insecure `
-  --output-dir ".\output"
-```
-
-如果 aTrust 证书已被当前机器信任，可以去掉 `--insecure`。
-
-## 确认后执行
-
-```powershell
-python .\atrust_feishu_resource_sync.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --ad-domain "AD_DIRECTORY_DOMAIN" `
-  --feishu-domain "FEISHU_DIRECTORY_DOMAIN" `
-  --match-fields "externalId,phone,email" `
-  --insecure `
-  --output-dir ".\output" `
-  --execute
-```
-
-## 输出文件
-
-脚本会在 `--output-dir` 目录下生成以下 CSV 文件：
-
-- `matched_users.csv`：AD 用户和飞书用户的匹配结果
-- `unmatched_ad_users.csv`：在飞书目录中找不到匹配用户的 AD 用户
-- `ambiguous_ad_users.csv`：匹配字段在飞书目录中不唯一的 AD 用户
-- `copied_grants.csv`：dry-run 计划复制或实际已复制的资源授权明细
-- `failed_grants.csv`：实际执行时失败的用户授权记录
-
-## 限定资源范围
-
-如果只想处理部分应用，可以准备一个 UTF-8 文本文件，每行一个应用 ID：
-
-```powershell
-python .\atrust_feishu_resource_sync.py ... --resource-id-file .\resource_ids.txt
-```
-
-如果只想处理部分应用分类，可以准备一个 UTF-8 文本文件，每行一个应用分类 ID：
-
-```powershell
-python .\atrust_feishu_resource_sync.py ... --resource-group-id-file .\resource_group_ids.txt
-```
-
-如果不需要同步应用分类，只同步应用：
-
-```powershell
-python .\atrust_feishu_resource_sync.py ... --skip-resource-groups
-```
-
-如果只想复制直接授权，不复制通过角色获得的授权：
-
-```powershell
-python .\atrust_feishu_resource_sync.py ... --direct-only
-```
-
-## Demo 脚本
-
-如果你只想验证“某一个 AD 域用户名的权限，是否能直接迁移到飞书用户”，可以用这个最小 demo：
-
-```powershell
-python .\demo_migrate_by_username.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --ad-domain "AD_DIRECTORY_DOMAIN" `
-  --feishu-domain "FEISHU_DIRECTORY_DOMAIN" `
-  --ad-username "zhangsan" `
-  --match-field "name" `
-  --insecure `
-  --output-dir ".\output-demo"
-```
-
-默认是 dry-run，只会生成报告，不会真实授权。确认无误后再加 `--execute`。
-
-如果飞书用户名和 AD 用户名不同，可以单独指定：
-
-```powershell
-python .\demo_migrate_by_username.py ... `
-  --ad-username "zhangsan" `
-  --feishu-username "zhang.san"
-```
-
-## 两阶段匹配
-
-如果你要先按 `AD_no` 和 AD 域账号用户名做全量匹配，再人工确认后迁移，用这个脚本：
-
-```powershell
-python .\demo_match_ad_no_then_migrate.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --ad-domain "AD_DIRECTORY_DOMAIN" `
-  --feishu-domain "FEISHU_DIRECTORY_DOMAIN" `
-  --ad-field "name" `
-  --feishu-field "AD_no" `
-  --insecure `
-  --output-dir ".\output-ad-no-demo"
-```
-
-第一步只会生成 `review_matches.csv`，你确认后再用同一个输出目录里的清单执行迁移：
-
-```powershell
-python .\demo_match_ad_no_then_migrate.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --ad-domain "AD_DIRECTORY_DOMAIN" `
-  --feishu-domain "FEISHU_DIRECTORY_DOMAIN" `
-  --ad-field "name" `
-  --feishu-field "AD_no" `
-  --insecure `
-  --output-dir ".\output-ad-no-demo" `
-  --execute `
-  --confirmed-file ".\output-ad-no-demo\review_matches.csv"
-```
-
-如果你截图里的字段实际叫 `ad_account`，把 `--feishu-field` 改成 `ad_account` 就行。
-
-## 匹配字段说明
-
-`--match-fields` 会按顺序尝试匹配，例如：
+当前项目只保留一条正式流程：
 
 ```text
-externalId,phone,email,name
+AD 用户 description  ->  飞书用户 description
 ```
 
-建议把最稳定、最唯一的字段放前面。手机号会自动去掉空格、短横线、区号符号等非数字字符后比较；其他字段会去掉首尾空格并忽略大小写。
+两边 `description` 都按工号匹配，例如 `HCXXXXXXXX`。AD 侧 `description` 为空的账号不会迁移。
 
-如果飞书目录中同一个匹配值对应多个用户，脚本不会自动授权，会把对应 AD 用户写入 `ambiguous_ad_users.csv`，等待人工确认。
+旧脚本和旧说明已放到 `archive/`，根目录只保留当前流程使用的文件。
 
-## 注意事项
+## 文件结构
 
-- 首次运行建议只 dry-run，先检查 `matched_users.csv` 和 `copied_grants.csv`。
-- `--execute` 会真实追加飞书用户的资源授权，请确认输出结果后再执行。
-- 脚本使用追加授权，不会删除飞书用户已有授权。
-- 如果 AD 用户没有任何应用或应用分类授权，不会出现在 `copied_grants.csv` 中。
+```text
+atrust_feishu_config.json          本地连接配置
+atrust_common.py                   公共 API/CSV 工具模块
+01_prepare_ad_authorized_grants.py 前置脚本：扫描 AD 授权并生成 CSV
+02_test_migrate_one_user.py        测试脚本：按 CSV 迁移一个用户
+03_migrate_all_from_csv.py         正式脚本：按 CSV 批量迁移全部用户
+outputs/precheck/                  前置脚本产物
+outputs/test/                      测试脚本产物
+outputs/formal/                    正式脚本产物
+archive/                           旧脚本归档
+```
 
-## AD 资源关联用户分析脚本
+## 配置
 
-如果客户当前只需要先分析 AD 域中“哪些用户关联了资源”，以及这些用户里手机号、邮箱的覆盖情况，可以使用新增的只读脚本：
+默认读取：
+
+```text
+atrust_feishu_config.json
+```
+
+确认 `base_url` 已填写真实 aTrust 地址：
+
+```json
+{
+  "base_url": "https://atrust.example.com:4433",
+  "api_id": "1027079",
+  "api_secret": "已配置",
+  "ad_domain": "ad13382",
+  "feishu_domain": "feishu86454",
+  "insecure": true,
+  "max_ops_per_second": 8.0
+}
+```
+
+## 1. 前置脚本
+
+默认只找 10 个“AD 侧有授权资源且能匹配到飞书用户”的用户，生成样本 CSV 后停止，用来先确认字段和授权数据。
 
 ```powershell
-python .\analyze_ad_resource_users.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --ad-domain "AD_DIRECTORY_DOMAIN" `
-  --insecure `
-  --output-dir ".\output-ad-analysis"
+python .\01_prepare_ad_authorized_grants.py
 ```
 
-这个脚本不会迁移授权，也不会修改线上配置。它会先读取 AD 用户目录，再扫描应用和应用分类授权关系，筛出存在资源关联的 AD 用户。默认会同时统计直接授权和角色授权。
+默认产物：
 
-输出文件：
+```text
+outputs/precheck/ad_authorized_grants_10.csv
+outputs/precheck/authorized_users_10.csv
+outputs/precheck/summary_10.json
+```
 
-- `ad_resource_users.csv`：所有有关联资源的 AD 用户清单，包含授权数量、手机号、邮箱、邮箱格式、重复手机号/邮箱标记。
-- `ad_resource_users_with_phone_or_email.csv`：在有关联资源的 AD 用户中，手机号或邮箱至少有一个不为空的用户明细。
-- `ad_resource_user_grants.csv`：有关联资源 AD 用户的授权明细，一行一条应用或应用分类授权。
-- `summary.json`：统计结论，包括 AD 总人数、有关联资源用户数、手机号覆盖率、邮箱覆盖率、手机号邮箱同时具备比例、两者都缺失比例、重复手机号/邮箱值数量、授权来源统计等。
-
-如果只想分析部分应用或应用分类，可以沿用 ID 文件参数：
+确认样本无误后，生成全量 CSV：
 
 ```powershell
-python .\analyze_ad_resource_users.py ... --resource-id-file .\resource_ids.txt
-python .\analyze_ad_resource_users.py ... --resource-group-id-file .\resource_group_ids.txt
+python .\01_prepare_ad_authorized_grants.py --full
 ```
 
-如果只分析应用授权，不分析应用分类：
+全量产物：
+
+```text
+outputs/precheck/ad_authorized_grants.csv
+outputs/precheck/authorized_users.csv
+outputs/precheck/unmatched_ad_users.csv
+outputs/precheck/ambiguous_ad_users.csv
+outputs/precheck/summary.json
+```
+
+`ad_authorized_grants.csv` 保留 AD 侧有授权资源的详细信息，包括 AD 用户、飞书用户、匹配字段、应用/应用分类、授权来源、有效期等字段。后续测试和正式迁移都只基于这个 CSV 执行，不再重复扫描资源授权。
+
+## 2. 测试脚本
+
+先用 10 人样本 CSV 测试一个用户。默认 dry-run，只写结果文件，不修改线上授权。
 
 ```powershell
-python .\analyze_ad_resource_users.py ... --skip-resource-groups
+python .\02_test_migrate_one_user.py --ad-description "HCXXXXXXXX"
 ```
 
-如果只统计直接授权，不统计角色继承授权：
+真正给这个用户追加授权：
 
 ```powershell
-python .\analyze_ad_resource_users.py ... --direct-only
+python .\02_test_migrate_one_user.py --ad-description "HCXXXXXXXX" --execute
 ```
 
-## 最新两阶段脚本
+测试产物：
 
-现在正确的是“AD -> 派拉 SSO”的这个脚本：
+```text
+outputs/test/test_user_grants.csv
+outputs/test/test_failed.csv
+```
+
+如果要从全量 CSV 测试某个用户：
 
 ```powershell
-python .\demo_ad_to_para_then_migrate.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --source-domain "AD_DIRECTORY_DOMAIN" `
-  --target-domain "PARA_DIRECTORY_DOMAIN" `
-  --source-field "name" `
-  --target-field "AD_no" `
-  --insecure `
-  --max-ops-per-second 8 `
-  --output-dir ".\output-ad-to-para-demo"
+python .\02_test_migrate_one_user.py `
+  --ad-description "HCXXXXXXXX" `
+  --input-csv ".\outputs\precheck\ad_authorized_grants.csv"
 ```
 
-确认后再执行：
+## 3. 正式脚本
+
+正式脚本默认读取全量 CSV：
+
+```text
+outputs/precheck/ad_authorized_grants.csv
+```
+
+先 dry-run 看统计：
 
 ```powershell
-python .\demo_ad_to_para_then_migrate.py `
-  --base-url "https://atrust.example.com:4433" `
-  --api-id "YOUR_API_ID" `
-  --api-secret "YOUR_API_SECRET" `
-  --source-domain "AD_DIRECTORY_DOMAIN" `
-  --target-domain "PARA_DIRECTORY_DOMAIN" `
-  --source-field "name" `
-  --target-field "AD_no" `
-  --insecure `
-  --max-ops-per-second 8 `
-  --output-dir ".\output-ad-to-para-demo" `
-  --execute `
-  --confirmed-file ".\output-ad-to-para-demo\review_matches.csv"
+python .\03_migrate_all_from_csv.py
 ```
 
-如果目标字段不是 `AD_no`，改成客户实际字段名，比如 `ad_account`。
+确认后批量追加授权：
+
+```powershell
+python .\03_migrate_all_from_csv.py --execute
+```
+
+正式产物：
+
+```text
+outputs/formal/all_grants_result.csv
+outputs/formal/all_failed.csv
+outputs/formal/summary.json
+```
+
+## 可选范围控制
+
+前置脚本可以限制只扫描部分应用或应用分类：
+
+```powershell
+python .\01_prepare_ad_authorized_grants.py --resource-id-file .\resource_ids.txt
+python .\01_prepare_ad_authorized_grants.py --resource-group-id-file .\resource_group_ids.txt
+python .\01_prepare_ad_authorized_grants.py --skip-resource-groups
+python .\01_prepare_ad_authorized_grants.py --direct-only
+```
