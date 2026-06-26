@@ -21,28 +21,7 @@ from urllib.request import Request, urlopen
 
 PAGE_SIZE = 5000
 DEFAULT_CONFIG_FILE = "atrust_feishu_config.json"
-DEFAULT_ORG_ENTITY_TYPES = ["department", "dept", "org", "organization"]
-DEFAULT_ORG_USER_FIELDS = [
-    "departmentId",
-    "department_id",
-    "deptId",
-    "dept_id",
-    "orgId",
-    "org_id",
-    "organizationId",
-    "organization_id",
-    "ouId",
-    "ou_id",
-    "departmentIdList",
-    "deptIdList",
-    "orgIdList",
-    "organizationIdList",
-    "departments",
-    "departmentList",
-    "deptList",
-    "orgList",
-    "organizationList",
-]
+GROUP_GRANT_SOURCE_TYPE = "group"
 
 
 @dataclass(frozen=True)
@@ -294,21 +273,40 @@ class ATrustClient:
         groups = data.get("resourceGroup", []) if isinstance(data, dict) else []
         return groups if isinstance(groups, list) else []
 
-    def query_assignments(self, path: str, resource_id: str, entity_types: list[str]) -> list[dict[str, Any]]:
+    def query_group_by_full_path(self, directory_domain: str, full_path: str) -> dict[str, Any]:
+        payload = self.request(
+            "POST",
+            "/api/v3/group/queryByFullPath",
+            body={
+                "directoryDomain": directory_domain,
+                "fullPath": full_path,
+            },
+        )
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
+
+    def query_assignments(
+        self,
+        path: str,
+        resource_id: str,
+        entity_types: list[str] | None,
+    ) -> list[dict[str, Any]]:
         assignments: list[dict[str, Any]] = []
         page_index = 1
         while True:
+            body: dict[str, Any] = {
+                "id": resource_id,
+                "fieldMode": "all",
+                "sortBy": "default",
+                "pageSize": PAGE_SIZE,
+                "pageIndex": page_index,
+            }
+            if entity_types is not None:
+                body["entityType"] = entity_types
             payload = self.request(
                 "POST",
                 path,
-                body={
-                    "id": resource_id,
-                    "fieldMode": "all",
-                    "sortBy": "default",
-                    "entityType": entity_types,
-                    "pageSize": PAGE_SIZE,
-                    "pageIndex": page_index,
-                },
+                body=body,
             )
             assignments.extend(extract_data_list(payload))
             if page_index >= page_count(payload):
@@ -347,12 +345,6 @@ def parse_id_file(path: str | None) -> set[str] | None:
     return values
 
 
-def parse_csv_arg(value: str | None, default: list[str]) -> list[str]:
-    if value is None:
-        return list(default)
-    return [item.strip() for item in value.split(",") if item.strip()]
-
-
 def write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8-sig", newline="") as fp:
@@ -385,51 +377,122 @@ def index_unique_users(
     return index, duplicates
 
 
-def collect_identity_values(value: Any) -> set[str]:
-    values: set[str] = set()
+def user_inherits_group_grants(user: dict[str, Any]) -> bool:
+    value = user.get("inheritGroup")
     if value is None:
-        return values
-    if isinstance(value, (str, int, float)):
-        text = str(value).strip()
-        if text:
-            values.add(text)
-        return values
-    if isinstance(value, dict):
-        for key in (
-            "id",
-            "value",
-            "departmentId",
-            "department_id",
-            "deptId",
-            "dept_id",
-            "orgId",
-            "org_id",
-            "organizationId",
-            "organization_id",
-            "ouId",
-            "ou_id",
-        ):
-            values.update(collect_identity_values(value.get(key)))
-        return values
-    if isinstance(value, list):
-        for item in value:
-            values.update(collect_identity_values(item))
-        return values
-    return values
+        return True
+    return str(value).strip().lower() not in {"0", "false", "no"}
 
 
-def build_org_to_users(
-    users: list[dict[str, Any]],
-    org_user_fields: list[str],
-) -> dict[str, list[dict[str, Any]]]:
-    org_to_users: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for user in users:
-        seen_values: set[str] = set()
-        for field in org_user_fields:
-            seen_values.update(collect_identity_values(user.get(field)))
-        for value in seen_values:
-            org_to_users[value].append(user)
-    return org_to_users
+def group_path_prefixes(path: Any) -> list[str]:
+    text = str(path or "").strip()
+    if not text or text == "/":
+        return []
+    parts = [part for part in text.strip("/").split("/") if part]
+    prefixes: list[str] = []
+    for index in range(1, len(parts) + 1):
+        prefixes.append("/" + "/".join(parts[:index]))
+    return prefixes
+
+
+def group_source_id(detail: dict[str, Any], full_path: str) -> str:
+    for key in ("id", "externalId", "external_id", "groupId", "group_id"):
+        value = detail.get(key)
+        if value:
+            return str(value)
+    return full_path
+
+
+def group_source_name(detail: dict[str, Any], full_path: str) -> str:
+    name = str(detail.get("name") or "").strip()
+    path = str(detail.get("fullPath") or full_path).strip()
+    return path or name or full_path
+
+
+def grant_item_id(item: Any) -> str:
+    if isinstance(item, dict):
+        for key in ("id", "data", "resourceId", "resource_id", "resourceGroupId", "resource_group_id"):
+            value = item.get(key)
+            if value:
+                return str(value)
+        return ""
+    return str(item or "").strip()
+
+
+def grant_item_name(item: Any, fallback: str) -> str:
+    if isinstance(item, dict):
+        return str(item.get("name") or item.get("resourceName") or item.get("resourceGroupName") or fallback)
+    return fallback
+
+
+def grant_item_time(item: Any, key: str) -> str | None:
+    if isinstance(item, dict):
+        return as_optional_str(item.get(key))
+    return None
+
+
+def append_group_detail_grants(
+    grants_by_user: dict[str, list[ResourceGrant]],
+    seen: set[tuple[str, str, str]],
+    user: dict[str, Any],
+    detail: dict[str, Any],
+    full_path: str,
+    *,
+    resource_names: dict[str, str],
+    group_names: dict[str, str],
+    include_resource_groups: bool,
+    resource_ids: set[str] | None,
+    group_ids: set[str] | None,
+) -> None:
+    user_id = str(user.get("id") or "")
+    if not user_id:
+        return
+    source_id = group_source_id(detail, full_path)
+    source_name = group_source_name(detail, full_path)
+
+    for item in detail.get("resourceIdList") or []:
+        rid = grant_item_id(item)
+        if not rid or (resource_ids is not None and rid not in resource_ids):
+            continue
+        key = (user_id, "resource", rid)
+        if key in seen:
+            continue
+        seen.add(key)
+        grants_by_user[user_id].append(
+            ResourceGrant(
+                kind="resource",
+                resource_id=rid,
+                resource_name=grant_item_name(item, resource_names.get(rid, "")),
+                source_type=GROUP_GRANT_SOURCE_TYPE,
+                source_id=source_id,
+                source_name=source_name,
+                effective_time=grant_item_time(item, "effectiveTime"),
+                expire_time=grant_item_time(item, "expireTime"),
+            )
+        )
+
+    if not include_resource_groups:
+        return
+    for item in detail.get("resourceGroupIdList") or []:
+        gid = grant_item_id(item)
+        if not gid or (group_ids is not None and gid not in group_ids):
+            continue
+        key = (user_id, "resourceGroup", gid)
+        if key in seen:
+            continue
+        seen.add(key)
+        grants_by_user[user_id].append(
+            ResourceGrant(
+                kind="resourceGroup",
+                resource_id=gid,
+                resource_name=grant_item_name(item, group_names.get(gid, "")),
+                source_type=GROUP_GRANT_SOURCE_TYPE,
+                source_id=source_id,
+                source_name=source_name,
+                effective_time=grant_item_time(item, "effectiveTime"),
+                expire_time=grant_item_time(item, "expireTime"),
+            )
+        )
 
 
 def match_ad_description_to_feishu_identifiers(
@@ -509,13 +572,12 @@ def discover_user_grants(
     client: ATrustClient,
     ad_users: list[dict[str, Any]],
     *,
+    directory_domain: str,
     include_groups: bool,
     include_roles: bool,
     resource_ids: set[str] | None,
     group_ids: set[str] | None,
     include_orgs: bool = True,
-    org_entity_types: list[str] | None = None,
-    org_user_fields: list[str] | None = None,
     stop_after_users: int | None = None,
 ) -> dict[str, list[ResourceGrant]]:
     grants_by_user: dict[str, list[ResourceGrant]] = defaultdict(list)
@@ -527,39 +589,58 @@ def discover_user_grants(
             for role_id in user.get("roleIdList") or []:
                 role_to_users[str(role_id)].append(user)
 
-    entity_types = ["user", "band"] if include_roles else ["user"]
-    org_types = org_entity_types or DEFAULT_ORG_ENTITY_TYPES
-    org_to_users: dict[str, list[dict[str, Any]]] = {}
-    if include_orgs:
-        entity_types.extend(org_types)
-        org_to_users = build_org_to_users(ad_users, org_user_fields or DEFAULT_ORG_USER_FIELDS)
-
-    base_entity_types = ["user", "band"] if include_roles else ["user"]
-    warned_org_entity_type_failure = False
-
-    def query_assignments_safely(path: str, rid: str) -> list[dict[str, Any]]:
-        nonlocal warned_org_entity_type_failure
-        try:
-            return client.query_assignments(path, rid, entity_types)
-        except RuntimeError:
-            if not include_orgs:
-                raise
-            if not warned_org_entity_type_failure:
-                print(
-                    "Warning: aTrust rejected the configured AD organization entity types; "
-                    "retrying with user/band only. Use --org-entity-types to set the actual AD values."
-                )
-                warned_org_entity_type_failure = True
-            return client.query_assignments(path, rid, base_entity_types)
-
     resources = client.query_resources()
     if resource_ids is not None:
         resources = [r for r in resources if str(r.get("id")) in resource_ids]
+    resource_names = {str(resource.get("id")): str(resource.get("name") or "") for resource in resources}
+
+    resource_groups: list[dict[str, Any]] = []
+    group_names: dict[str, str] = {}
+    if include_groups:
+        resource_groups = client.query_resource_groups()
+        if group_ids is not None:
+            resource_groups = [g for g in resource_groups if str(g.get("id")) in group_ids]
+        group_names = {str(group.get("id")): str(group.get("name") or "") for group in resource_groups}
+
+    if include_orgs:
+        group_detail_cache: dict[str, dict[str, Any] | None] = {}
+        for user in ad_users:
+            if not user_inherits_group_grants(user):
+                continue
+            for full_path in group_path_prefixes(user.get("groupPath")):
+                if full_path not in group_detail_cache:
+                    try:
+                        group_detail_cache[full_path] = client.query_group_by_full_path(directory_domain, full_path)
+                    except RuntimeError as exc:
+                        print(f"Warning: failed to query AD group fullPath={full_path}: {exc}")
+                        group_detail_cache[full_path] = None
+                detail = group_detail_cache.get(full_path)
+                if not detail:
+                    continue
+                append_group_detail_grants(
+                    grants_by_user,
+                    seen,
+                    user,
+                    detail,
+                    full_path,
+                    resource_names=resource_names,
+                    group_names=group_names,
+                    include_resource_groups=include_groups,
+                    resource_ids=resource_ids,
+                    group_ids=group_ids,
+                )
+                if include_roles:
+                    for role_id in detail.get("roleIdList") or []:
+                        role_to_users[str(role_id)].append(user)
+                if stop_after_users and len(grants_by_user) >= stop_after_users:
+                    return grants_by_user
+
+    entity_types = ["user", "band"] if include_roles else ["user"]
     for resource in resources:
         rid = str(resource.get("id") or "")
         if not rid:
             continue
-        assignments = query_assignments_safely("/api/v3/resourceAssign/queryById", rid)
+        assignments = client.query_assignments("/api/v3/resourceAssign/queryById", rid, entity_types)
         for assignment in assignments:
             append_assignment_grant(
                 grants_by_user,
@@ -570,21 +651,16 @@ def discover_user_grants(
                 resource_name=str(resource.get("name") or ""),
                 ad_user_ids=ad_user_ids,
                 role_to_users=role_to_users,
-                org_to_users=org_to_users,
-                org_entity_types=set(org_types),
             )
             if stop_after_users and len(grants_by_user) >= stop_after_users:
                 return grants_by_user
 
     if include_groups:
-        groups = client.query_resource_groups()
-        if group_ids is not None:
-            groups = [g for g in groups if str(g.get("id")) in group_ids]
-        for group in groups:
+        for group in resource_groups:
             gid = str(group.get("id") or "")
             if not gid:
                 continue
-            assignments = query_assignments_safely("/api/v3/resourceGroupAssign/queryById", gid)
+            assignments = client.query_assignments("/api/v3/resourceGroupAssign/queryById", gid, entity_types)
             for assignment in assignments:
                 append_assignment_grant(
                     grants_by_user,
@@ -595,8 +671,6 @@ def discover_user_grants(
                     resource_name=str(group.get("name") or ""),
                     ad_user_ids=ad_user_ids,
                     role_to_users=role_to_users,
-                    org_to_users=org_to_users,
-                    org_entity_types=set(org_types),
                 )
                 if stop_after_users and len(grants_by_user) >= stop_after_users:
                     return grants_by_user
@@ -613,8 +687,6 @@ def append_assignment_grant(
     resource_name: str,
     ad_user_ids: set[str],
     role_to_users: dict[str, list[dict[str, Any]]],
-    org_to_users: dict[str, list[dict[str, Any]]],
-    org_entity_types: set[str],
 ) -> None:
     source_id = str(assignment.get("id") or "")
     entity_type = str(assignment.get("entityType") or "")
@@ -622,8 +694,6 @@ def append_assignment_grant(
         target_user_ids = [source_id] if source_id in ad_user_ids else []
     elif entity_type == "band":
         target_user_ids = [str(user.get("id")) for user in role_to_users.get(source_id, []) if user.get("id")]
-    elif entity_type in org_entity_types:
-        target_user_ids = [str(user.get("id")) for user in org_to_users.get(source_id, []) if user.get("id")]
     else:
         target_user_ids = []
 
